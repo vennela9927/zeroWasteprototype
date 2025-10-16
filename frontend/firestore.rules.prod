@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isUser(userId) { return request.auth != null && request.auth.uid == userId; }
+
+    match /users/{userId} {
+      allow read: if isUser(userId);
+      allow create: if isUser(userId);
+      allow update: if isUser(userId);
+    }
+
+    match /food_items/{foodId} {
+      allow read: if true; // public read of listings
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (
+        resource.data.donorId == request.auth.uid ||
+        (!('donorId' in resource.data) && request.resource.data.donorId == request.auth.uid)
+      );
+    }
+
+    match /claims/{claimId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.recipientId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.donorId == request.auth.uid
+      );
+    }
+
+    match /food_predictions/{predictionId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+  }
+}

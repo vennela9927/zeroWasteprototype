@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isUser(userId) { return request.auth != null && request.auth.uid == userId; }
+
+    // Users profile documents
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isUser(userId));
+      allow create: if isUser(userId);
+      allow update: if isUser(userId);
+    }
+
+    // Food items (donations)
+    match /food_items/{foodId} {
+      // Readable to signed-in users (you can loosen to public if desired)
+      allow read: if true;
+      // Create allowed for any signed-in user (donor or recipient)
+      allow create: if isSignedIn();
+      // Update allowed only to original donor (match donorId) or to mark claim fields by recipient via server logic
+      allow update: if isSignedIn() && (
+        resource.data.donorId == request.auth.uid ||
+        (!('donorId' in resource.data) && request.resource.data.donorId == request.auth.uid)
+      );
+    }
+
+    // Claims (recipient claims a food item)
+    match /claims/{claimId} {
+      allow read: if isSignedIn();
+      // Recipient must be the one creating the claim for themselves
+      allow create: if isSignedIn() && request.resource.data.recipientId == request.auth.uid;
+      // Updates allowed by recipient (e.g., mark picked_up) or donor (e.g., mark completed)
+      allow update: if isSignedIn() && (
+        resource.data.recipientId == request.auth.uid ||
+        resource.data.donorId == request.auth.uid
+      );
+    }
+
+    // AI predictions (write restricted - expect server side generation)
+    match /food_predictions/{predictionId} {
+      allow read: if isSignedIn();
+      allow write: if false; // locked down until server / admin function implemented
+    }
+  }
+}

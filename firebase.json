@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "source": "backend/functions",
+    "runtime": "nodejs20",
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log"
+    ]
+  },
+  "firestore": {
+    "rules": "frontend/firestore.rules.prod",
+    "indexes": "firestore.indexes.json"
+  }
+}
