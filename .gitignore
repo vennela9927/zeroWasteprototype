@@ -1,6 +1,18 @@
 # Firebase Service Account Keys (NEVER COMMIT!)
 serviceAccountKey.json
 **/serviceAccountKey.json
+# Broader patterns to catch renamed/duplicated keys
+serviceAccountKey*.json
+**/serviceAccountKey*.json
+
+# Common private key/credential formats
+*.pem
+*.key
+*.p8
+*.p12
+*.keystore
+credentials.*
+**/credentials.*
 
 # Dependencies
 node_modules/
