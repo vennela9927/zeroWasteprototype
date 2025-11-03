@@ -6,7 +6,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 import Home from './src/pages/Home';
-import NotFound from './src/pages/NotFound';
+import NotFound from './src/pages/Notfound';
 import Dashboard from './src/pages/Dashboard';
 import DonorDashboard from './src/pages/DonorDashboard';
 import ImpactDashboard from './src/pages/ImpactDashboard';
