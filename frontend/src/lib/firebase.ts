@@ -3,31 +3,30 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, serverTimestamp, doc, getDoc, collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 
-// Helper to read Vite environment variables
-function pick(key: string): string | undefined {
-  return (import.meta as any).env[key];
-}
-
-// Firebase config
+// Firebase config (hardcoded to ensure production build has correct values)
 const firebaseConfig = {
-  apiKey: pick('VITE_FIREBASE_API_KEY')!,
-  authDomain: pick('VITE_FIREBASE_AUTH_DOMAIN')!,
-  projectId: pick('VITE_FIREBASE_PROJECT_ID')!,
-  storageBucket: pick('VITE_FIREBASE_STORAGE_BUCKET')!,
-  messagingSenderId: pick('VITE_FIREBASE_MESSAGING_SENDER_ID')!,
-  appId: pick('VITE_FIREBASE_APP_ID')!,
-  measurementId: pick('VITE_FIREBASE_MEASUREMENT_ID'), // optional
+  apiKey: "AIzaSyDu5fj7ch0LInzSfgplN53M_nwswwtZHGQ",
+  authDomain: "zerowaste-677fd.firebaseapp.com",
+  projectId: "zerowaste-677fd",
+  storageBucket: "zerowaste-677fd.appspot.com",
+  messagingSenderId: "36277658933",
+  appId: "1:36277658933:web:93f78c646c80c54683d87c",
+  measurementId: "G-66VDT5R89R"
 };
 
 // Initialize Firebase
 export const app = initializeApp(firebaseConfig);
 
-// Dev-time diagnostics: expose app/db & projectId for quick console inspection
-if ((import.meta as any).env?.DEV) {
+// Diagnostics: log minimal config details (safe)
+try {
   // eslint-disable-next-line no-console
-  console.log('[debug][firebase] projectId:', firebaseConfig.projectId);
+  console.log('[firebase-config]', {
+    projectId: (firebaseConfig as any).projectId,
+    authDomain: (firebaseConfig as any).authDomain,
+    apiKeyPrefix: ((firebaseConfig as any).apiKey || '').slice(0, 8)
+  });
   (window as any).__FIREBASE_APP__ = app;
-}
+} catch {}
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 

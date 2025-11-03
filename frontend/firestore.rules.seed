@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isUser(userId) { return request.auth != null && request.auth.uid == userId; }
+
+    // Users profile documents - TEMPORARY: Allow authenticated users to create any user doc for seeding
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn(); // ⚠️ TEMPORARY for seeding
+      allow update: if isSignedIn() && isUser(userId);
+    }
+
+    // Food items (donations)
+    match /food_items/{foodId} {
+      allow read: if true; // Public read
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn();
+    }
+
+    // Claims (recipient claims a food item)
+    match /claims/{claimId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn();
+    }
+
+    // Reward accounts
+    match /reward_accounts/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+    }
+
+    // Micro donations
+    match /micro_donations/{donationId} {
+      allow read: if true; // Public for transparency
+      allow create: if isSignedIn();
+    }
+
+    // Verification requests
+    match /verification_requests/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+    }
+
+    // Audit logs - immutable
+    match /audit_logs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // Drivers
+    match /drivers/{driverId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+    }
+
+    // Delivery tasks
+    match /delivery_tasks/{taskId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+    }
+
+    // AI predictions
+    match /food_predictions/{predictionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+    }
+
+    // Anomaly scores
+    match /anomaly_scores/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+    }
+  }
+}
+
+
+
+
+
+

@@ -8,19 +8,26 @@ export interface ClaimRecord {
   foodItemId: string;
   recipientId: string;
   claimedAt: any;
-  status: 'requested' | 'approved' | 'rejected' | 'fulfilled' | 'cancelled';
+  status: 'requested' | 'approved' | 'rejected' | 'fulfilled' | 'cancelled' | 'picked_up' | 'in_transit' | 'delivered' | 'verified';
   quantity?: number;
   foodName?: string;
   donorName?: string;
   recipientName?: string;
+  location?: string; // pickup location string from listing
+  latitude?: number;
+  longitude?: number;
   requestedAt?: any;
   approvedAt?: any;
   rejectedAt?: any;
   fulfilledAt?: any;
+  pickedUpAt?: any;
+  inTransitAt?: any;
+  deliveredAt?: any;
+  verifiedAt?: any;
 }
 
 export function useClaims(role: 'donor' | 'recipient') {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [claims, setClaims] = useState<ClaimRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -34,7 +41,38 @@ export function useClaims(role: 'donor' | 'recipient') {
       q = query(collection(db, 'claims'), where('donorId', '==', user.uid), orderBy('requestedAt', 'desc'));
     }
     const unsub = onSnapshot(q, snap => {
-      setClaims(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+      const claimsList = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      
+      // eslint-disable-next-line no-console
+      console.log(`\n🔄 [CLAIMS REALTIME UPDATE] Role: ${role}`);
+      // eslint-disable-next-line no-console
+      console.log(`   Total claims: ${claimsList.length}`);
+      
+      // Count by status
+      const statusCounts: Record<string, number> = {};
+      claimsList.forEach(claim => {
+        statusCounts[claim.status] = (statusCounts[claim.status] || 0) + 1;
+      });
+      
+      // eslint-disable-next-line no-console
+      console.log(`   Status breakdown:`, statusCounts);
+      
+      // Show recent changes
+      snap.docChanges().forEach(change => {
+        const data = change.doc.data();
+        if (change.type === 'modified') {
+          // eslint-disable-next-line no-console
+          console.log(`   📝 MODIFIED: Claim ${change.doc.id.substring(0, 8)}... → Status: ${data.status} (${data.foodName || 'Unknown'})`);
+        } else if (change.type === 'added') {
+          // eslint-disable-next-line no-console
+          console.log(`   ➕ ADDED: Claim ${change.doc.id.substring(0, 8)}... → Status: ${data.status} (${data.foodName || 'Unknown'})`);
+        } else if (change.type === 'removed') {
+          // eslint-disable-next-line no-console
+          console.log(`   ➖ REMOVED: Claim ${change.doc.id.substring(0, 8)}...`);
+        }
+      });
+      
+      setClaims(claimsList);
       setLoading(false);
     }, err => {
       // eslint-disable-next-line no-console
@@ -62,7 +100,15 @@ export function useClaims(role: 'donor' | 'recipient') {
     if (next === 'rejected') patch.rejectedAt = ts();
     if (next === 'fulfilled') patch.fulfilledAt = ts();
     if (next === 'cancelled') patch.cancelledAt = ts();
+    
+    console.log(`\n🔄 [UPDATE CLAIM STATUS]`);
+    console.log(`   Claim ID: ${claimId}`);
+    console.log(`   New Status: ${next}`);
+    console.log(`   Patch Data:`, patch);
+    
     await updateDoc(ref, patch);
+    
+    console.log(`   ✅ Firestore updated successfully`);
     // Side-effect: update related food_items status
     try {
       // Find claim we just updated

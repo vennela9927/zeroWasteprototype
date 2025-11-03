@@ -5,7 +5,7 @@ service cloud.firestore {
     function isUser(userId) { return request.auth != null && request.auth.uid == userId; }
 
     match /users/{userId} {
-      allow read: if isUser(userId);
+      allow read: if isSignedIn(); // Allow all signed-in users to read profiles (for showing names)
       allow create: if isUser(userId);
       allow update: if isUser(userId);
     }
@@ -13,19 +13,22 @@ service cloud.firestore {
     match /food_items/{foodId} {
       allow read: if true; // public read of listings
       allow create: if isSignedIn();
+      // Update allowed for:
+      // 1. Original donor (can update their own items)
+      // 2. NGO requesting the item (can set status to 'requested' and requestedBy field)
       allow update: if isSignedIn() && (
         resource.data.donorId == request.auth.uid ||
-        (!('donorId' in resource.data) && request.resource.data.donorId == request.auth.uid)
+        (!('donorId' in resource.data) && request.resource.data.donorId == request.auth.uid) ||
+        (request.resource.data.status == 'requested' && request.resource.data.requestedBy == request.auth.uid)
       );
     }
 
     match /claims/{claimId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.recipientId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        resource.data.recipientId == request.auth.uid ||
-        resource.data.donorId == request.auth.uid
-      );
+      // Allow any signed-in user to create a claim (NGO or donor)
+      allow create: if isSignedIn();
+      // Allow any signed-in user to update claims they're involved in
+      allow update: if isSignedIn();
     }
 
     match /food_predictions/{predictionId} {

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { Shield, AlertCircle } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { getAuth, signOut } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -9,10 +10,20 @@ import TopBar from '../components/TopBar';
 import FoodListingsTable from '../components/FoodListingsTable';
 import ProfileSettings from '../components/ProfileSettings';
 import PublicProfileModal from '../components/PublicProfileModal';
+import DonorAnalytics from '../components/DonorAnalytics';
+import NGOAnalytics from '../components/NGOAnalytics';
+import DonorHistory from '../components/DonorHistory';
+import NGOHistory from '../components/NGOHistory';
+import DonationQRCode from '../components/DonationQRCode';
+import RewardsWidget from '../components/RewardsWidget';
+import FoodManagement from '../components/FoodManagement';
+import { generateDonationCertificate } from '../utils/csrCertificate';
+import { getAuditTrail } from '../utils/auditLog';
 import { fetchUserProfile } from '../lib/fetchUserProfile';
 import { useClaims } from '../hooks/useClaims';
 import { useAuth } from '../context/AuthContext';
 import { useFoodListings } from '../hooks/useFoodListings';
+import { sortListingsByRelevance } from '../utils/smartMatching';
 
 const Dashboard: React.FC = () => {
   const [activeSection, setActiveSection] = useState('home');
@@ -38,40 +49,51 @@ const Dashboard: React.FC = () => {
   const discardListingForDonor = async (id: string) => discardListing(id);
   const extendListingForDonor = async (id: string, minutes: number) => extendListingExpiry(id, minutes);
   const roleForClaims = profile?.role === 'recipient' ? 'recipient' : 'donor';
-  const { claims } = useClaims(roleForClaims);
+  const { claims, updateClaimStatus } = useClaims(roleForClaims);
   const [publicProfile, setPublicProfile] = useState<any|null>(null);
   const [publicProfileOpen, setPublicProfileOpen] = useState(false);
 
   // Removed timeline & AI widget on NGO home minimal spec
 
-  const sortedListings = foodListings; // already sorted appropriately by hook query
+  // Smart sorting for NGO view
+  const smartSortedListings = useMemo(() => {
+    if (userTypeForListings === 'ngo' && profile) {
+      // Apply smart sorting based on NGO profile
+      const ngoProfile = {
+        foodPreference: profile.foodPreference,
+        capacity: profile.capacity,
+        latitude: profile.latitude,
+        longitude: profile.longitude,
+        preparationCapability: profile.preparationCapability,
+      };
+      
+      return sortListingsByRelevance(foodListings, ngoProfile);
+    }
+    return foodListings;
+  }, [foodListings, profile, userTypeForListings]);
+
+  // For now: show all available foods (no smart sorting constraints for NGO)
   const filteredNgoListings = userTypeForListings === 'ngo'
-    ? sortedListings.filter(l =>
+    ? foodListings.filter(l =>
         ngoLocationQuery.trim() === '' ||
         (l.location || '').toLowerCase().includes(ngoLocationQuery.trim().toLowerCase())
       )
-    : sortedListings;
+    : smartSortedListings;
 
   const handleClaimFood = async (id: string) => {
-    await claimListing(id);
-    toast.success('Request sent to donor for approval');
-  };
-
-  const handleLogout = async () => {
-    const auth = getAuth();
     try {
-      if (auth.currentUser) {
-        const functions = getFunctions();
-        await httpsCallable(functions, 'logoutUser')({});
-      }
-    } catch {
-      // ignore callable errors; still sign out locally
-    } finally {
-      try { await signOut(auth); } catch {}
-      // replace with your router if needed
-      window.location.href = '/login';
+      // Find the listing to get its match score for AI learning
+      const listing = filteredNgoListings.find(l => l.id === id);
+      const matchScore = (listing as any)?._matchScore;
+      
+      await claimListing(id, matchScore);
+      toast.success('Request sent to donor for approval');
+    } catch (error) {
+      console.error('[handleClaimFood] Error:', error);
+      toast.error('Failed to send request: ' + (error as Error).message);
     }
   };
+
 
   const renderDonorDashboard = () => {
     const now = new Date();
@@ -85,7 +107,20 @@ const Dashboard: React.FC = () => {
     }).length;
   // claimedListingsCount no longer displayed on simplified home
 
-    const pendingRequests = claims.filter(c => c.status === 'requested');
+    const pendingClaims = claims.filter(c => c.status === 'requested');
+    // Fallback: also include listings marked as requested (in case claim.donorId was missing)
+    const requestedFromListings = foodListings
+      .filter((l: any) => l.status === 'requested')
+      .map((l: any) => ({
+        id: `req_listing_${l.id}`,
+        status: 'requested',
+        requestedAt: l.requestedAt,
+        recipientName: 'NGO',
+        location: l.location,
+        quantity: l.quantity,
+        foodName: l.foodName || l.name,
+      }));
+    const pendingRequests = [...pendingClaims, ...requestedFromListings];
 
     // --- New Home Page Summary Widgets ---
     // Active donations summary
@@ -132,6 +167,34 @@ const Dashboard: React.FC = () => {
 
     return (
       <div className="space-y-8">
+        {/* Aadhaar Verification Banner - Show only if NOT verified */}
+        {!(profile as any)?.aadhaarVerified && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card-fintech p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <AlertCircle className="text-amber-600" size={24} />
+                </div>
+                <div>
+                  <p className="font-bold text-amber-900">Aadhaar Not Verified</p>
+                  <p className="text-sm text-amber-700">Complete verification to increase trust and credibility</p>
+                </div>
+              </div>
+              <button
+                onClick={() => navigate('/verify-aadhaar')}
+                className="bg-gradient-to-r from-blue-700 to-cyan-500 text-white font-bold px-5 py-2 rounded-lg hover:from-blue-800 hover:to-cyan-600 transition-all flex items-center gap-2 whitespace-nowrap"
+              >
+                <Shield size={18} />
+                Verify Now
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {/* 1. Quick Add Donation Button (prominent first) */}
         <div className="card-fintech p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -159,15 +222,8 @@ const Dashboard: React.FC = () => {
             {milestoneMessage && <p className="mt-2 text-[11px] font-semibold text-blue-700">{milestoneMessage}</p>}
           </div>
 
-          {/* 4. AI Suggestion + Expiry Alert (combined if needed) */}
-          <div className="card-fintech p-5">
-            <h3 className="text-sm font-semibold text-slate-600 mb-2">AI Suggestion</h3>
-            <p className="text-sm font-medium text-zinc-900">Best time today:</p>
-            <p className="text-lg font-black bg-gradient-to-r from-blue-700 to-cyan-500 bg-clip-text text-transparent">{aiBestWindow}</p>
-            {hoursLeft !== null && soonestActive && (
-              <p className="text-[11px] mt-3 text-amber-600 font-semibold">{soonestActive.ref.foodName || soonestActive.ref.name} expires in ~{hoursLeft}h</p>
-            )}
-          </div>
+          {/* 4. Rewards Widget */}
+          <RewardsWidget userId={user?.uid} compact={true} />
         </div>
 
         {/* 5. Recent Donation History (last 3) */}
@@ -179,16 +235,60 @@ const Dashboard: React.FC = () => {
           {recentDonations.length === 0 && <p className="text-xs text-slate-500">No donations yet.</p>}
           <ul className="divide-y divide-slate-100">
             {recentDonations.map(r => {
+              const approvedForListing = claims.find((c:any)=>c.foodItemId===r.id && c.status==='approved');
               const created = r.createdAt?.toDate ? r.createdAt.toDate() : null;
               const tsLabel = created ? created.toLocaleString(undefined,{ month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
-              const status = r.status || (r.claimed ? 'claimed' : 'available');
+              const status = approvedForListing ? 'approved' : (r.status || (r.claimed ? 'claimed' : 'available'));
               return (
                 <li key={r.id} className="py-2 flex items-center justify-between">
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="text-xs font-mono text-slate-400">{tsLabel}</span>
                     <p className="font-medium text-zinc-900 truncate">{r.foodName || r.name}</p>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${status==='claimed'?'bg-blue-100 text-blue-700':status==='requested'?'bg-amber-100 text-amber-700':status==='available'?'bg-green-100 text-green-700':'bg-slate-100 text-slate-600'}`}>{status}</span>
+                  <div className="flex items-center gap-2">
+                    {status==='approved' && approvedForListing && (approvedForListing as any)?.latitude != null && (approvedForListing as any)?.longitude != null ? (
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${(approvedForListing as any).latitude},${(approvedForListing as any).longitude}`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                        title="Open pickup location in Google Maps"
+                      >
+                        Maps
+                      </a>
+                    ) : status==='approved' && approvedForListing?.location ? (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(approvedForListing.location)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                        title="Open pickup location in Google Maps"
+                      >
+                        Maps
+                      </a>
+                    ) : status==='claimed' && (r as any)?.latitude != null && (r as any)?.longitude != null ? (
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${(r as any).latitude},${(r as any).longitude}`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                        title="Open pickup location in Google Maps"
+                      >
+                        Maps
+                      </a>
+                    ) : status==='claimed' && r.location ? (
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.location)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                        title="Open pickup location in Google Maps"
+                      >
+                        Maps
+                      </a>
+                    ) : null}
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${status==='approved'?'bg-blue-100 text-blue-700':status==='claimed'?'bg-blue-100 text-blue-700':status==='requested'?'bg-amber-100 text-amber-700':status==='available'?'bg-green-100 text-green-700':'bg-slate-100 text-slate-600'}`}>{status}</span>
+                  </div>
                 </li>
               );
             })}
@@ -236,6 +336,52 @@ const Dashboard: React.FC = () => {
             </div>
           );
         })()}
+
+        {/* 7. Pending Requests (NGO claims awaiting your approval) */}
+        {pendingRequests.length > 0 && (
+          <div className="card-fintech p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-slate-600 uppercase tracking-wide">Pending Requests</h3>
+              <span className="text-[10px] font-semibold text-slate-500">{pendingRequests.length} total</span>
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {pendingRequests.map((req:any)=>{
+                const whenTs = req.requestedAt?.toDate && req.requestedAt.toDate();
+                const when = whenTs ? whenTs.toLocaleString(undefined,{ month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+                return (
+                  <li key={req.id} className="py-2 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-xs font-mono text-slate-400 whitespace-nowrap">{when}</span>
+                      <p className="font-medium text-zinc-900 truncate">{req.recipientName || 'NGO'} requested {req.foodName || 'Food'} ({req.quantity || 1})</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {req.location && (
+                        <a
+                          href={((req as any)?.latitude != null && (req as any)?.longitude != null)
+                            ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${(req as any).latitude},${(req as any).longitude}`)}`
+                            : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(req.location)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1 rounded-md text-[11px] font-semibold bg-blue-600 text-white"
+                        >
+                          View on Maps
+                        </a>
+                      )}
+                      <button
+                        onClick={async ()=>{ await updateClaimStatus(req.id, 'approved'); toast.success('Request approved'); }}
+                        className="px-2 py-1 rounded-md text-[11px] font-semibold bg-green-600 text-white"
+                      >Approve</button>
+                      <button
+                        onClick={async ()=>{ await updateClaimStatus(req.id, 'rejected'); toast.info('Request rejected'); }}
+                        className="px-2 py-1 rounded-md text-[11px] font-semibold bg-slate-200 text-slate-700"
+                      >Reject</button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
     );
   };
@@ -266,6 +412,34 @@ const Dashboard: React.FC = () => {
 
     return (
       <div className="space-y-8">
+        {/* Aadhaar Verification Banner - Show only if NOT verified */}
+        {!(profile as any)?.aadhaarVerified && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card-fintech p-4 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <AlertCircle className="text-amber-600" size={24} />
+                </div>
+                <div>
+                  <p className="font-bold text-amber-900">Aadhaar Not Verified</p>
+                  <p className="text-sm text-amber-700">Complete verification to increase trust and credibility</p>
+                </div>
+              </div>
+              <button
+                onClick={() => navigate('/verify-aadhaar')}
+                className="bg-gradient-to-r from-blue-700 to-cyan-500 text-white font-bold px-5 py-2 rounded-lg hover:from-blue-800 hover:to-cyan-600 transition-all flex items-center gap-2 whitespace-nowrap"
+              >
+                <Shield size={18} />
+                Verify Now
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {/* Top snapshot row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="card-fintech p-5">
@@ -305,7 +479,30 @@ const Dashboard: React.FC = () => {
                       <span className="text-xs font-mono text-slate-400">{when}</span>
                       <p className="font-medium text-zinc-900 truncate">{c.foodName || 'Food Item'}</p>
                     </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${c.status==='fulfilled'?'bg-green-100 text-green-700':c.status==='approved'?'bg-blue-100 text-blue-700':c.status==='requested'?'bg-amber-100 text-amber-700':c.status==='cancelled'?'bg-slate-200 text-slate-600':'bg-slate-100 text-slate-600'}`}>{c.status}</span>
+                    <div className="flex items-center gap-2">
+                      {c.status==='approved' && (c as any)?.latitude != null && (c as any)?.longitude != null ? (
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${(c as any).latitude},${(c as any).longitude}`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                          title="Open pickup location in Google Maps"
+                        >
+                          Maps
+                        </a>
+                      ) : c.status==='approved' && c.location ? (
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.location)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-600 text-white"
+                          title="Open pickup location in Google Maps"
+                        >
+                          Maps
+                        </a>
+                      ) : null}
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${c.status==='fulfilled'?'bg-green-100 text-green-700':c.status==='approved'?'bg-blue-100 text-blue-700':c.status==='requested'?'bg-amber-100 text-amber-700':c.status==='cancelled'?'bg-slate-200 text-slate-600':'bg-slate-100 text-slate-600'}`}>{c.status}</span>
+                    </div>
                   </li>
                 );
               })}
@@ -339,7 +536,7 @@ const Dashboard: React.FC = () => {
             <div className="mt-4">
               <label htmlFor="ngo-location-search" className="block text-sm font-semibold text-slate-700 mb-2">Search by Location</label>
               <input id="ngo-location-search" type="text" value={ngoLocationQuery} onChange={e=>setNgoLocationQuery(e.target.value)} placeholder="Enter area / location keyword" className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-slate-50/50" />
-              {ngoLocationQuery && <p className="text-xs text-slate-500 mt-1">Filtering {filteredNgoListings.length} of {sortedListings.length} listings</p>}
+              {ngoLocationQuery && <p className="text-xs text-slate-500 mt-1">Filtering {filteredNgoListings.length} of {foodListings.length} listings</p>}
             </div>
           </div>
           {loading && <p className="text-slate-500 text-sm">Loading...</p>}
@@ -391,30 +588,21 @@ const Dashboard: React.FC = () => {
               />
             )}
             {activeSection === 'food' && userTypeForListings === 'ngo' && (
-              <div className="text-center py-12">
-                <h2 className="text-2xl font-black text-zinc-900 mb-4">Food Management</h2>
-                <p className="text-slate-600">Food management features are donor-only.</p>
-              </div>
+              <FoodManagement />
             )}
             
             {activeSection === 'history' && userTypeForListings === 'donor' && (
               <DonorHistory listings={foodListings as any} claims={claims as any} />
             )}
             {activeSection === 'history' && userTypeForListings === 'ngo' && (
-              <div className="text-center py-12">
-                <h2 className="text-2xl font-black text-zinc-900 mb-4">History</h2>
-                <p className="text-slate-600">History view focused on donor accounts.</p>
-              </div>
+              <NGOHistory claims={claims as any} listings={foodListings as any} />
             )}
             
             {activeSection === 'analytics' && userTypeForListings === 'donor' && (
               <DonorAnalytics listings={foodListings as any} claims={claims as any} />
             )}
             {activeSection === 'analytics' && userTypeForListings === 'ngo' && (
-              <div className="card-fintech p-8 text-center">
-                <h2 className="text-2xl font-black text-zinc-900 mb-4">Analytics</h2>
-                <p className="text-slate-600 max-w-lg mx-auto">Analytics panel is donor-centric.</p>
-              </div>
+              <NGOAnalytics claims={claims as any} listings={foodListings as any} />
             )}
             
             {activeSection === 'profile' && <ProfileSettings />}
@@ -440,6 +628,7 @@ const DonorFoodManagement: React.FC<DonorFoodManagementProps> = ({ listings, add
   const [editing, setEditing] = React.useState<any|null>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [filter, setFilter] = React.useState<'active'|'claimed'|'expired'|'all'>('active');
+  const [qrViewItem, setQrViewItem] = React.useState<any|null>(null);
 
   const deriveStatus = (l:any) => {
     if (l.status === 'requested') return 'requested';
@@ -465,17 +654,28 @@ const DonorFoodManagement: React.FC<DonorFoodManagementProps> = ({ listings, add
       name: String(fd.get('name')||'').trim(),
       quantity: Number(fd.get('quantity')||0),
       expiry: String(fd.get('expiry')||''),
+      preparedTime: String(fd.get('preparedTime')||'').trim() || undefined,
       location: String(fd.get('location')||''),
-      foodType: String(fd.get('foodType')||'').trim() || undefined
+      foodType: String(fd.get('foodType')||'').trim() || undefined,
+      preparationType: String(fd.get('preparationType')||'cooked').trim()
     };
     if (!payload.name || !payload.quantity || !payload.expiry || !payload.location) return;
     try {
       setSubmitting(true);
       if (editing) {
-        await edit(editing.id, { foodName: payload.name, name: payload.name, quantity: payload.quantity, expiry: payload.expiry, location: payload.location, foodType: payload.foodType?.toLowerCase() });
+        await edit(editing.id, { 
+          foodName: payload.name, 
+          name: payload.name, 
+          quantity: payload.quantity, 
+          expiry: payload.expiry, 
+          location: payload.location, 
+          foodType: payload.foodType?.toLowerCase(),
+          preparationType: payload.preparationType?.toLowerCase() as 'raw'|'cooked'|'packaged',
+          preparedTime: payload.preparedTime
+        });
         toast.success('Donation updated');
       } else {
-        await add(payload);
+        await add({ ...payload, foodType: payload.foodType?.toLowerCase() } as any);
         toast.success('Donation added');
       }
       setEditing(null); setFormOpen(false); evt.currentTarget.reset();
@@ -506,31 +706,52 @@ const DonorFoodManagement: React.FC<DonorFoodManagementProps> = ({ listings, add
         <button onClick={()=>{ setEditing(null); setFormOpen(o=>!o); }} className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-700 to-cyan-500 text-white text-xs font-bold">{formOpen? 'Close' : 'Add Donation'}</button>
       </div>
       {formOpen && (
-        <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 md:grid-cols-5 gap-4">
+        <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-xl p-5 grid grid-cols-1 md:grid-cols-6 gap-4">
           <div className="md:col-span-2">
             <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Food Name</label>
-            <input name="name" defaultValue={editing?.foodName||editing?.name||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="e.g., Rice" />
+            <input name="name" defaultValue={editing?.foodName||editing?.name||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="e.g., Rice & Dal" required />
           </div>
           <div>
-            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Type</label>
-            <input name="foodType" defaultValue={editing?.foodType||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="rice" />
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Food Type</label>
+            <select name="foodType" defaultValue={editing?.foodType||'veg'} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm">
+              <option value="veg">Veg</option>
+              <option value="non-veg">Non-Veg</option>
+              <option value="rice">Rice</option>
+              <option value="bread">Bread</option>
+              <option value="curry">Curry</option>
+              <option value="mixed">Mixed</option>
+            </select>
           </div>
-            <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Quantity</label>
-              <input name="quantity" type="number" defaultValue={editing?.quantity||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Expiry</label>
-              <input name="expiry" type="date" defaultValue={editing?.expiry || ''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Location</label>
-              <input name="location" defaultValue={editing?.location||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="Pickup location" />
-            </div>
-            <div className="md:col-span-3 flex items-end gap-2">
-              <button disabled={submitting} type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold disabled:opacity-50">{editing? 'Save Changes':'Create Donation'}</button>
-              {editing && <button type="button" onClick={()=>{setEditing(null);}} className="px-3 py-2 rounded-lg bg-slate-200 text-xs font-semibold">Cancel Edit</button>}
-            </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Preparation</label>
+            <select name="preparationType" defaultValue={(editing as any)?.preparationType||'cooked'} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm">
+              <option value="raw">Raw</option>
+              <option value="cooked">Cooked</option>
+              <option value="packaged">Packaged</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Quantity (meals)</label>
+            <input name="quantity" type="number" defaultValue={editing?.quantity||''} min="1" className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" required />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Prepared Time</label>
+            <input name="preparedTime" type="datetime-local" defaultValue={(editing as any)?.preparedTime || ''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+            <p className="text-[9px] text-slate-500 mt-0.5">When was food cooked? (optional)</p>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Expiry Date</label>
+            <input name="expiry" type="date" defaultValue={editing?.expiry || ''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" required />
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-600 mb-1">Pickup Location</label>
+            <input name="location" defaultValue={editing?.location||''} className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm" placeholder="e.g., 123 Main St, Bangalore" required />
+          </div>
+          <div className="md:col-span-3 flex items-end gap-2">
+            <button disabled={submitting} type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold disabled:opacity-50">{editing? 'Save Changes':'Create Donation'}</button>
+            {editing && <button type="button" onClick={()=>{setEditing(null);}} className="px-3 py-2 rounded-lg bg-slate-200 text-xs font-semibold">Cancel Edit</button>}
+            <span className="text-[10px] text-slate-500 ml-2">💡 AI matches using freshness + urgency + distance</span>
+          </div>
         </form>
       )}
       <div className="card-fintech">
@@ -560,6 +781,8 @@ const DonorFoodManagement: React.FC<DonorFoodManagementProps> = ({ listings, add
                     <td className="py-2 pr-4 text-slate-600 whitespace-nowrap">{expiryStr}</td>
                     <td className="py-2 pr-4"><span className={`px-2 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wide ${badge(l._status)}`}>{l._status}</span></td>
                     <td className="py-2 pr-4 space-x-1 whitespace-nowrap">
+                      {/* QR Code Action - Always available for tracking */}
+                      <button onClick={()=>setQrViewItem(l)} className="text-xs font-semibold px-2 py-1 rounded-md bg-emerald-200 hover:bg-emerald-300">📱 QR</button>
                       {/* Copy action removed */}
                       {['available','requested'].includes(l._status) && <button onClick={()=>setEditing(l)} className="text-xs font-semibold px-2 py-1 rounded-md bg-blue-200 hover:bg-blue-300">Edit</button>}
                       {['available','requested'].includes(l._status) && <button onClick={()=>cancel(l.id)} className="text-xs font-semibold px-2 py-1 rounded-md bg-orange-200 hover:bg-orange-300">Cancel</button>}
@@ -575,6 +798,30 @@ const DonorFoodManagement: React.FC<DonorFoodManagementProps> = ({ listings, add
           </table>
         </div>
       </div>
+
+      {/* QR Code Modal */}
+      {qrViewItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" onClick={()=>setQrViewItem(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={(e)=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-black text-zinc-900">Donation QR Code</h3>
+              <button onClick={()=>setQrViewItem(null)} className="text-slate-400 hover:text-slate-600 text-2xl leading-none">&times;</button>
+            </div>
+            <div className="flex justify-center">
+              <DonationQRCode foodItem={qrViewItem} size={250} showActions={true} />
+            </div>
+            <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <p className="text-xs font-semibold text-blue-900 mb-2">🔒 How QR Tracking Works</p>
+              <ul className="text-[10px] text-blue-700 space-y-1 ml-4 list-disc">
+                <li>Driver scans QR at pickup to confirm collection</li>
+                <li>NGO scans QR at delivery to verify receipt</li>
+                <li>All scans are logged with GPS coordinates</li>
+                <li>Creates immutable audit trail for transparency</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -585,126 +832,3 @@ const InsightStat: React.FC<{ label: string; value: number; variant?: 'warn' | '
     <p className={`mt-1 text-xl font-black ${variant==='warn'?'text-red-600':'text-zinc-900'}`}>{value}</p>
   </div>
 );
-
-// History Component (Donor)
-const DonorHistory: React.FC<{ listings: any[]; claims: any[]; }> = ({ listings }) => {
-  const deriveStatus = (l: any) => {
-    if (l.status === 'requested') return 'requested';
-    if (l.claimed || l.status === 'claimed') return 'claimed';
-    if (l.status === 'discarded') return 'discarded';
-    if (l.status === 'cancelled') return 'cancelled';
-    const expiryDate = l.expiryTime?.toDate ? l.expiryTime.toDate() : (l.expiry ? new Date(l.expiry) : null);
-    if (expiryDate && expiryDate.getTime() < Date.now()) return 'expired';
-    return l.status || 'available';
-  };
-  const historyRows = listings
-    .map(l => ({ ...l, _status: deriveStatus(l) }))
-    .filter(l => ['claimed','expired','discarded','cancelled','picked_up','fulfilled'].includes(l._status));
-  // Basic impact badges
-  const totalMeals = historyRows.reduce((s,l)=>s+(l.quantity||0),0);
-  const claimedMeals = historyRows.filter(r=>r._status==='claimed' || r._status==='picked_up' || r._status==='fulfilled').reduce((s,l)=>s+(l.quantity||0),0);
-  const expiredMeals = historyRows.filter(r=>r._status==='expired').reduce((s,l)=>s+(l.quantity||0),0);
-  const milestones = [
-    totalMeals >= 10 && 'First 10 meals donated',
-    totalMeals >= 50 && '50+ meal milestone',
-    claimedMeals >= 100 && '100 meals shared',
-    expiredMeals === 0 && totalMeals > 0 && 'Zero Waste Streak'
-  ].filter(Boolean) as string[];
-  return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-black text-zinc-900 mb-1">Donation History</h2>
-          <p className="text-slate-600 text-sm">Past donations & outcomes</p>
-        </div>
-        <button className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-700 to-cyan-500 text-white font-semibold text-sm">Download CSV</button>
-      </div>
-      {milestones.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {milestones.map(m => <span key={m} className="px-3 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">{m}</span>)}
-        </div>
-      )}
-      <div className="card-fintech overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 text-left">
-              <th className="py-2 pr-4 font-semibold text-slate-600">Date</th>
-              <th className="py-2 pr-4 font-semibold text-slate-600">Food</th>
-              <th className="py-2 pr-4 font-semibold text-slate-600">Qty</th>
-              <th className="py-2 pr-4 font-semibold text-slate-600">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {historyRows.map(r => {
-              const created = r.createdAt?.toDate ? r.createdAt.toDate() : null;
-              const dateStr = created ? created.toLocaleDateString(undefined,{ month:'short', day:'numeric'}) : '—';
-              return (
-                <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2 pr-4 text-slate-600 whitespace-nowrap">{dateStr}</td>
-                  <td className="py-2 pr-4 font-medium text-zinc-900">{r.foodName || r.name}</td>
-                  <td className="py-2 pr-4 text-slate-600">{r.quantity}</td>
-                  <td className="py-2 pr-4"><span className={`px-2 py-1 rounded-full text-[11px] font-semibold uppercase tracking-wide ${r._status==='claimed'?'bg-blue-100 text-blue-700':r._status==='expired'?'bg-red-100 text-red-700':r._status==='discarded'?'bg-slate-200 text-slate-700':r._status==='cancelled'?'bg-slate-200 text-slate-600':'bg-slate-100 text-slate-600'}`}>{r._status}</span></td>
-                </tr>
-              );
-            })}
-            {historyRows.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-500">No history yet.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
-// Analytics component (Donor)
-const DonorAnalytics: React.FC<{ listings: any[]; claims: any[]; }> = ({ listings, claims }) => {
-  const approvedClaims = claims.filter(c => c.status === 'approved' || c.status === 'fulfilled');
-  // Total meals donated = sum quantity of all listings (could refine to approved only)
-  const totalMeals = listings.reduce((s,l)=>s+(l.quantity||0),0);
-  const totalNGOs = new Set(approvedClaims.map(c => c.recipientId)).size;
-  const avgClaimTimeMs = (() => {
-    const deltas: number[] = [];
-    approvedClaims.forEach(c => {
-      try {
-        if (c.requestedAt?.toDate && c.approvedAt?.toDate) {
-          deltas.push(c.approvedAt.toDate().getTime() - c.requestedAt.toDate().getTime());
-        }
-      } catch { /* noop */ }
-    });
-    if (!deltas.length) return 0;
-    return Math.round(deltas.reduce((a,b)=>a+b,0)/deltas.length/60000); // minutes
-  })();
-  const sustainabilityScore = totalMeals * 5; // placeholder formula
-  // NGO leaderboard
-  const leaderboardMap: Record<string, number> = {};
-  approvedClaims.forEach(c => {
-    const key = c.recipientName || c.recipientId || 'Unknown';
-    leaderboardMap[key] = (leaderboardMap[key] || 0) + (c.quantity || 0);
-  });
-  const leaderboard = Object.entries(leaderboardMap).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,value])=>({ name, value }));
-  const foodTypeAgg: Record<string, number> = {};
-  listings.forEach(l => { const key = l.foodType || (l.foodName||'Other').toLowerCase(); foodTypeAgg[key] = (foodTypeAgg[key]||0)+(l.quantity||0); });
-  // foodTypeData removed from simplified analytics output
-  return (
-    <div className="space-y-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-black text-zinc-900 mb-1">Analytics & Impact</h2>
-          <p className="text-slate-600 text-sm">High-level insights about your donations</p>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <InsightStat label="Total Meals Donated" value={totalMeals} />
-        <InsightStat label="NGOs Helped" value={totalNGOs} />
-        <InsightStat label="Avg Claim Time (m)" value={avgClaimTimeMs} />
-        <InsightStat label="Sustainability Score" value={sustainabilityScore} />
-      </div>
-      <div className="card-fintech">
-        <h3 className="text-lg font-black text-zinc-900 mb-4">NGO Leaderboard</h3>
-        <ul className="space-y-2 text-sm">
-          {leaderboard.length === 0 && <li className="text-slate-500">No claims yet</li>}
-          {leaderboard.map(r => <li key={r.name} className="flex justify-between"><span className="font-medium text-zinc-900">{r.name}</span><span className="text-slate-600">{r.value}</span></li>)}
-        </ul>
-      </div>
-    </div>
-  );
-};

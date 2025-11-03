@@ -12,6 +12,9 @@ interface ZeroUserProfile {
   name: string;
   email: string;
   role: UserRole;
+  accountType?: 'individual' | 'company'; // Donor account type
+  companyName?: string; // For company accounts
+  gstNumber?: string; // For company accounts
   phone?: string;
   location?: any; // GeoPoint placeholder
   profileImage?: string;
@@ -55,6 +58,12 @@ interface ZeroUserProfile {
   socialLinks?: { website?: string; facebook?: string; instagram?: string; twitter?: string; }; // social media
   allowContact?: boolean; // donor allows NGOs to contact
   locationShare?: boolean; // donor shares location
+  // Smart matching fields for NGOs
+  foodPreference?: 'veg' | 'non-veg' | 'both'; // Veg/Non-veg preference
+  capacity?: number; // Number of people NGO can serve per day
+  latitude?: number; // NGO location latitude
+  longitude?: number; // NGO location longitude
+  preparationCapability?: 'raw' | 'cooked' | 'both'; // Can handle raw or cooked food
 }
 
 interface AuthContextValue {
@@ -99,12 +108,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (snap.exists()) {
               setProfile(snap.data() as ZeroUserProfile);
             } else {
-              setProfile({
-                uid: u.uid,
-                name: u.displayName || u.email || 'User',
-                email: u.email || '',
-                role: 'donor'
-              });
+              // Do not assume a default role; wait for signup to create profile
+              setProfile(null);
             }
         } else {
           setProfile(null);

@@ -1,0 +1,48 @@
+import React, { useState } from 'react';
+import { getAuth, signOut } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+
+function Sidebar() {
+	const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+	const handleLogout = async () => {
+		if (isLoggingOut) return;
+		setIsLoggingOut(true);
+		const auth = getAuth();
+		try {
+			if (auth.currentUser) {
+				const functions = getFunctions();
+				await httpsCallable(functions, 'logoutUser')({});
+			}
+		} catch {
+			// ignore callable errors; still sign out locally
+		} finally {
+			try { await signOut(auth); } catch {}
+			window.location.href = '/login';
+		}
+	};
+
+	return (
+		<aside className="sidebar">
+			{/* ...existing sidebar items... */}
+			<nav>
+				<ul>
+					{/* ...existing nav items... */}
+					<li>
+						<button
+							type="button"
+							onClick={handleLogout}
+							disabled={isLoggingOut}
+							aria-label="Logout"
+							title="Logout"
+						>
+							{isLoggingOut ? 'Logging out...' : 'Logout'}
+						</button>
+					</li>
+				</ul>
+			</nav>
+		</aside>
+	);
+}
+
+export default Sidebar;

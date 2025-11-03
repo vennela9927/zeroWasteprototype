@@ -11,6 +11,8 @@ const foodSchema = z.object({
   quantity: z.number().min(1, 'Quantity must be at least 1'),
   expiry: z.string().min(1, 'Expiry date is required'),
   location: z.string().min(1, 'Location is required'),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
 });
 
 type FoodFormData = z.infer<typeof foodSchema>;
@@ -20,7 +22,7 @@ interface FoodFormProps {
 }
 
 const FoodForm: React.FC<FoodFormProps> = ({ onSubmit }) => {
-  const { register, handleSubmit, formState: { errors }, reset, watch } = useForm<FoodFormData>({
+  const { register, handleSubmit, formState: { errors }, reset, watch, setValue } = useForm<FoodFormData>({
     resolver: zodResolver(foodSchema),
   });
 
@@ -49,6 +51,68 @@ const FoodForm: React.FC<FoodFormProps> = ({ onSubmit }) => {
   };
 
   const warning = getSurplusWarning(quantity || 0, hoursToExpiry);
+  // Optional Google Places Autocomplete integration
+  React.useEffect(() => {
+    const apiKey = (import.meta as any)?.env?.VITE_GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return; // skip if no key provided
+    const ensureScript = () => new Promise<void>((resolve, reject) => {
+      if ((window as any).google?.maps?.places) { resolve(); return; }
+      const existing = document.getElementById('gmaps-places-script');
+      if (existing) { existing.addEventListener('load', () => resolve()); return; }
+      const s = document.createElement('script');
+      s.id = 'gmaps-places-script';
+      s.async = true;
+      s.defer = true;
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load Google Maps JS'));
+      document.head.appendChild(s);
+    });
+    let autocomplete: any;
+    ensureScript()
+      .then(() => {
+        const input = document.getElementById('location') as HTMLInputElement | null;
+        if (!input || !(window as any).google?.maps?.places) return;
+        // @ts-ignore
+        autocomplete = new (window as any).google.maps.places.Autocomplete(input, { fields: ['formatted_address', 'geometry'] });
+        autocomplete.addListener('place_changed', () => {
+          try {
+            const place = autocomplete.getPlace();
+            const addr = place?.formatted_address;
+            const loc = place?.geometry?.location;
+            if (addr) setValue('location', addr, { shouldValidate: true, shouldDirty: true });
+            if (loc) {
+              const lat = typeof loc.lat === 'function' ? loc.lat() : (loc.lat || null);
+              const lng = typeof loc.lng === 'function' ? loc.lng() : (loc.lng || null);
+              if (typeof lat === 'number' && isFinite(lat)) setValue('latitude', lat);
+              if (typeof lng === 'number' && isFinite(lng)) setValue('longitude', lng);
+            }
+          } catch {
+            /* noop */
+          }
+        });
+      })
+      .catch(() => { /* ignore script load errors; fallback remains */ });
+    return () => {
+      // no teardown required for Autocomplete
+    };
+  }, [setValue]);
+  const useMyLocation = async () => {
+    if (!navigator.geolocation) {
+      toast.error('Geolocation is not supported by your browser');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setValue('latitude', latitude);
+        setValue('longitude', longitude);
+        toast.success('Location captured');
+      },
+      () => toast.error('Failed to get current location'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   return (
     <div className="card-fintech">
@@ -127,6 +191,11 @@ const FoodForm: React.FC<FoodFormProps> = ({ onSubmit }) => {
               placeholder="Address or area"
             />
             {errors.location && <p className="text-red-500 text-sm mt-2 font-medium">{errors.location.message}</p>}
+            <div className="flex items-center gap-3 mt-3">
+              <button type="button" onClick={useMyLocation} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold">Use my location</button>
+              <input {...register('latitude', { valueAsNumber: true })} type="number" step="any" placeholder="Lat" className="w-28 px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+              <input {...register('longitude', { valueAsNumber: true })} type="number" step="any" placeholder="Lng" className="w-28 px-3 py-2 rounded-lg border border-slate-300 text-sm" />
+            </div>
           </div>
         </div>
 

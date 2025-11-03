@@ -10,25 +10,22 @@ import { getAuth, signOut } from 'firebase/auth';
 
 const Home: React.FC = () => {
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     // eslint-disable-next-line no-console
     console.debug('[home] auth user change', { hasUser: !!user });
-    if (user) navigate('/dashboard');
-  }, [user, navigate]);
+    if (user && profile) {
+      // Redirect based on user role
+      if (profile.role === 'recipient') {
+        navigate('/dashboard'); // NGO goes to old dashboard
+      } else {
+        navigate('/donor'); // Donor goes to new donor page
+      }
+    }
+  }, [user, profile, navigate]);
 
-  const handleLogout = async () => {
-		try {
-			const fn = httpsCallable(getFunctions(), 'logoutUser');
-			await fn({});
-		} catch (e) {
-			// optionally log error
-		} finally {
-			await signOut(getAuth());
-		}
-	};
 
   // Authentication now managed by AuthContext; modal just triggers login/signup.
 
