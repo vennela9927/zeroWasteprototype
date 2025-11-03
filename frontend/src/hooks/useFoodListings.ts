@@ -55,6 +55,24 @@ export function useFoodListings(role: 'donor' | 'ngo') {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const deriveWithExpiry = useCallback((items: FoodListing[]): FoodListing[] => {
+    const now = Date.now();
+    return items.map((l) => {
+      let expiryDate: Date | null = null;
+      try {
+        expiryDate = l.expiryTime?.toDate ? l.expiryTime.toDate() : (l.expiry ? new Date(l.expiry) : null);
+      } catch { /* ignore parse errors */ }
+
+      const isExpired = !!(expiryDate && expiryDate.getTime() < now);
+
+      // Derive a consistent status without mutating Firestore
+      if (isExpired) {
+        return { ...l, status: 'expired' } as FoodListing;
+      }
+      return l;
+    });
+  }, []);
+
   useEffect(() => {
     if (!user) return;
     
@@ -66,7 +84,8 @@ export function useFoodListings(role: 'donor' | 'ngo') {
       );
       const unsub = onSnapshot(q, snap => {
         const raw = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as FoodListing[];
-        setListings(raw);
+        const normalized = deriveWithExpiry(raw);
+        setListings(normalized);
         setLoading(false);
       }, err => {
         console.error('[food_items] listener error', err);
@@ -85,7 +104,10 @@ export function useFoodListings(role: 'donor' | 'ngo') {
       const broadQuery = collection(db, 'food_items');
       const unsub = onSnapshot(broadQuery, snap => {
         const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as FoodListing[];
-        setListings(items);
+        const normalized = deriveWithExpiry(items);
+        // NGOs should never see expired items in discovery feeds
+        const visible = normalized.filter(i => i.status !== 'expired');
+        setListings(visible);
         setLoading(false);
       }, err => {
         console.error('[food_items] NGO broad listener error', err);
@@ -97,7 +119,8 @@ export function useFoodListings(role: 'donor' | 'ngo') {
         try {
           const snap = await m.getDocs(collection(db, 'food_items'));
           const items = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as FoodListing[];
-          if (items.length && loading) setListings(items);
+          const normalized = deriveWithExpiry(items).filter(i => i.status !== 'expired');
+          if (normalized.length && loading) setListings(normalized);
         } catch (e) {
           console.warn('[food_items] NGO fallback getDocs failed', e);
         }
