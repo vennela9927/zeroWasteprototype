@@ -271,7 +271,7 @@ const Home: React.FC = () => {
           </div>
           
           <div className="border-t border-zinc-800 mt-8 pt-8 text-center text-slate-400">
-            <p>&copy; 2025 ZeroWaste. All rights reserved. Built with ❤️ by <a rel="nofollow" target="_blank" href="https://meku.dev" className="text-blue-400 hover:text-blue-300 transition-colors">Meku.dev</a></p>
+            <p>&copy; 2025 ZeroWaste. All rights reserved.</p>
           </div>
         </div>
       </footer>
